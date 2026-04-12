@@ -8,7 +8,7 @@ Item {
 
     RowLayout {
         anchors.centerIn: parent
-        anchors.horizontalCenterOffset: - (winstate.contentWidth + margin * 3) - (winname.width / 2)
+        anchors.horizontalCenterOffset: -(winstate.contentWidth + margin * 3) -(winname.width /2)
         width: 0
         spacing: margin
 
@@ -21,7 +21,7 @@ Item {
 
         MyText {
             id: winname
-            text: initial.elidedText(Niri.focusedWindow?.title ?? "", Text.ElideMiddle, screen.width / 2).replace('…', '⋯')
+            text: initial.elidedText(Niri.focusedWindow?.title ?? "", Text.ElideMiddle, screen.width /2).replace('…', ' ⋯ ')
             font.bold: true
             FontMetrics { id: initial; font.family: winname.font.family; font.pixelSize: winname.font.pixelSize }
         }

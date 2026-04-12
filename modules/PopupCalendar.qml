@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Layouts
+import QtQuick.Controls
 import Quickshell
 import Quickshell.Io
 
@@ -7,229 +8,243 @@ Item {
     id: root
     width: parent.width
     height: parent.height
+    visible: Niri.oview
 
-    property alias calArea: calArea // pass up the extra regions -> shell.qml
-    property alias holidayArea: holidayArea
+    property list<Item> regions: monthGrid.visible ? [monthGrid, holidayDisplay, openGlobe, globe] : [null, null, null, null]
 
-    property point screenpos: { // get screenspace position of parent's top left point
-        parent.x; parent.y
-        Window.window?.x; Window.window?.y
-        return parent.mapToGlobal(0, 0)
-    }
-    
-    function mod(a, b) { return a -b * Math.floor(a /b) } // need this for a % -b
-    function sw(x, a, b) { return (x > a && x < b ) } // sandwich (a < x < b)
+    property point screenpos: { parent.x; parent.y; Window.window?.x; Window.window?.y; return parent.mapToGlobal(0, 0) }
+    property real cellSize: (screenpos.x + root.width -margin) /5
 
-    function doi(i) { // date of index
-        var offset = mod(mod(clock.date.getDate(), 7) - clock.date.getDay(), -7) - clock.date.getDate() + i + shift
-        return new Date(clock.date.getFullYear(), clock.date.getMonth(), clock.date.getDate() + offset)
-    }
-
-    property date hoveredDate: clock.date
-    property int vHoveredMonth: temp
-    property int temp
-
-    property string holiplace: "US" // manually set in this file for now
-    property var holidays: { holidayTick; return Object.values(cache.data ?? {}).reduce((acc, arr) => acc.concat(arr), []) }
-    property int holidayTick
-    property var cachedYears: Object.keys(cache.data ?? {})
+    property string holiplace: globe.selected
+    property string holiISO: globe.selectediso
     property bool fetching
+    property int holidayTick
     FileView {
         path: Quickshell.shellDir + "/holidays.json"
         onAdapterUpdated: writeAdapter()
         onLoadFailed: writeAdapter()
+        onLoaded: Qt.callLater(() => { globe.selected = cache.selected || "" })
         JsonAdapter {
             id: cache
             property var data: ({})
+            property string selected: ""
         }
     }
     function fetchHolidays(year) {
-        const cached = cache.data?.[year]
-        if (cached) { return }
+        if (!holiISO || cache.data?.[holiISO]?.[year]) return
+        var country = holiISO
+        fetching = true
         const req = new XMLHttpRequest()
-        req.open("GET", `https://date.nager.at/api/v3/PublicHolidays/${year}/${holiplace}`)
+        req.open("GET", `https://date.nager.at/api/v3/publicholidays/${year}/${country}`)
         req.onreadystatechange = () => {
-            if (req.readyState === 4) {
-                const data = JSON.parse(req.responseText)
-                cache.data = Object.assign({}, cache.data ?? {}, { [year]: data })
-                holidayTick++
+            if (req.readyState !== 4) return
+            if (req.status !== 200) {
+                console.warn("Holiday fetch failed:", req.status, req.responseText)
                 fetching = false
-            } console.log(data)
+                return
+            }
+            cache.data = Object.assign(cache.data, {
+              [country]: Object.assign(cache.data[country] || {}, {
+                [year]: JSON.parse(req.responseText)
+              })
+            })
+            console.log("Fetched", country, year)
+            holidayTick++
+            fetching = false
         }
         req.send()
-        fetching = true
     }
-    function isHoliday(date) {
-        const iso = date.toISOString().split("T")[0]
-        return holidays.some(h => h.date === iso)
+    property var holidayMap: {
+        holidayTick
+        const map = {}
+        for (const country of Object.values(cache.data ?? {}))
+            for (const arr of Object.values(country))
+                for (const h of arr)
+                    (map[h.date] = map[h.date] ?? []).push(h.localName)
+        return map
     }
-    function holidaysOnDate(date) {
-        const iso = date.toISOString().split("T")[0]
-        return holidays
-            .filter(h => h.date === iso)
-            .map(h => h.localName)
-            .join("\n")
+    function cachedCountries(year) { holidayTick; return Object.keys(cache.data ?? {}).filter(c => cache.data[c]?.[year]) }
+    function holidaysOnDate(date) { return [...new Set(holidayMap[date.toISOString().split("T")[0]] ?? [])].join("\n") }
+    Connections {
+        target: globe
+        function onSelectedChanged() { Qt.callLater(() => { cache.selected = globe.selected }) }
     }
 
-    property int overAny
+
+    property int firstNdate: 1 -new Date(clock.date.getFullYear(), clock.date.getMonth(), 1).getDay()
+    function makeCell(ndate) {
+        const fullDate = new Date(clock.date.getFullYear(), clock.date.getMonth(), ndate)
+        return {
+            ndate,
+            fullDate,
+            date: fullDate.getDate(),
+            month: fullDate.getMonth(),
+            year: fullDate.getFullYear()
+        }
+    }
+    property var cellInfo: Array.from({length: 42}, (_, i) => makeCell(firstNdate + i))
+    property var hoveredCell: cellInfo[clock.date.getDate() -cellInfo[0].ndate]
+    property int hoveredIndex
+    signal refresh()
+    function resetCalendar() {
+        firstNdate = 1 -new Date(clock.date.getFullYear(), clock.date.getMonth(), 1).getDay()
+        cellInfo = Array.from({length: 42}, (_, i) => makeCell(firstNdate + i))
+        refresh()
+    }
+    property int currentDay: clock.date.getDate()
+    onCurrentDayChanged: resetCalendar()
+
+    property bool overAny: baseArea.hovered || gridArea.hovered || holiArea.hovered || openArea.hovered || globeArea.hovered
+    HoverHandler { id: baseArea }
     onOverAnyChanged: {
-        if (overAny) { calOn = true; countdown.stop() }
-        else { countdown.restart() }
+        if(overAny) { monthGrid.visible = true; cooldown.stop() }
+        else { cooldown.restart() }
     }
-    HoverHandler { onHoveredChanged: {overAny += hovered ? 1 : -1; refresh()} } // root copies parent's dimensions, this
-    Timer {                                                                     // enables the calendar on hovering it
-        id: countdown
-        interval: 500
-        onTriggered: calOn = false
+    Timer {
+        id: cooldown
+        interval: 600
+        onTriggered: monthGrid.visible = false
     }
-    property bool calOn
-    property int shift
 
-    signal refresh() // to update dayBox HoverHandler logic via Connections when onHoveredChanged doesn't trigger
+    GridLayout {
+		id: monthGrid
+        y: root.height + margin
+		rowSpacing: 0
+        columnSpacing: 0
+        columns: 7
+        visible: false
 
-    Rectangle {
-        id: container
-        width: parent.width + (screenpos.x -margin) // this makes the calendar bigger based on
-        y: parent.height + margin                   // how far to the right the praent is
-        visible: Niri.oview
-
-        Item {
-            id: calArea
-            width: dateLayout.implicitWidth * calOn
-            height: dateLayout.implicitHeight * calOn
-            HoverHandler { onHoveredChanged: overAny += hovered ? 1 : -1 }
-            WheelHandler { // scroll the calendar by shifting rawdate with root.shift
-                acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
-                onWheel: wheel => {
-                    shift += wheel.angleDelta.y < 0 ? 7 : -7
-                    refresh()
+        WheelHandler {
+            acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+            onWheel: wheel => {
+                if(wheel.angleDelta.y < 0) {
+                    cellInfo = cellInfo.slice(7).concat( [0,1,2,3,4,5,6].map(i => makeCell(firstNdate + 42 + i)) )
+                    firstNdate += 7
                 }
-            }
-            TapHandler {
-                acceptedButtons: Qt.MiddleButton
-                onTapped: { shift = 0; refresh() }
+                else {
+                    cellInfo = [0,1,2,3,4,5,6].map(i => makeCell(firstNdate -7 + i)).concat( cellInfo.slice(0, 35) )
+                    firstNdate -= 7
+                }
+                refresh()
             }
         }
-        
-        GridLayout {
-            id: dateLayout
-            rowSpacing: margin
-            columnSpacing: margin
-            columns: 7
-            visible: (calOn == true)
-            
-            Repeater {
-                id: grid
-                model: 7 * 6
-            
-                Item {
-                    width: container.width /5  // /n -> n squares = distance from screen left to parent right
-                    height: container.width /5
+        TapHandler { acceptedButtons: Qt.MiddleButton; onTapped: resetCalendar() }
+        HoverHandler { id: gridArea }
 
-                    property int rawdate: index + mod(mod(clock.date.getDate(), 7) -clock.date.getDay(), -7) + shift
-                    // rawdate is a numberline where 1 = start of this month
+        Repeater {
+            model: 7 * 6
+
+            Item {
+                Layout.preferredWidth:  cellSize + margin
+                Layout.preferredHeight: cellSize + margin
+                property var cell: cellInfo[index]
+
+                Rectangle {
+                    anchors.fill: parent
+                    anchors.rightMargin: margin
+                    anchors.bottomMargin: margin
+
+                    color: Qt.alpha(Qt.darker(fontColor), cell.month == hoveredCell.month ? 3/4 : 1/2)
+                    border.width: margin
+                    border.color:
+                        cell.ndate == clock.date.getDate()    ? color12(cell.month) :
+                        cell.ndate == clock.date.getUTCDate() ? Qt.darker(color12(cell.month)) :
+                        cell.month == hoveredCell.month       ? fontColor :
+                                                                Qt.alpha(Qt.darker(fontColor), 3/4)
+
+                    MyText {
+                        x: parent.border.width
+                        y: parent.border.width
+                        text: cell.date
+                        color: cellArea.hovered ? color12(cell.month) : fontColor
+                        font.bold: cellArea.hovered
+                        opacity: cell.month == hoveredCell.month ? 1 : 3/4
+                    }
+
                     Rectangle {
-                        id: box
-                        anchors.fill: parent
-                        color: box.v(rawdate) == vHoveredMonth ? Qt.alpha(Qt.darker(fontColor), 3/4)
-                                                                : Qt.alpha(Qt.darker(fontColor), 1/2)
-                        border.width: margin
-                        border.color: rawdate == clock.date.getDate() ? Qt.alpha(monthcolor, 3/4) :
-                                      rawdate == clockdate.getDate() ? Qt.darker(Qt.alpha(monthcolor, 3/4)) : // UTC date
-                                      box.v(rawdate) == vHoveredMonth ?
-                                      Qt.alpha(fontColor, 3/4) :
-                                      Qt.alpha(Qt.darker(fontColor), 1/4)
-                        function v(d) { return index -new Date(clock.date.getFullYear(), clock.date.getMonth(), d).getDate() }
-                        // idk how this works but it returns a different value for different months
-                        MyText {
-                            id: dateNumber
-                            x: parent.border.width
-                            y: parent.border.width
-                            text: new Date(clock.date.getFullYear(), clock.date.getMonth(), rawdate).getDate()
-                            opacity: box.v(rawdate) == vHoveredMonth ? 1 : 3/4
-                            color: dayBox.hovered ? color12(new Date(clock.date.setDate(rawdate)).getMonth()) : fontColor
-                            font.bold: dayBox.hovered                            
-                        }
-
-                        MyText {
-                            anchors.right: parent.right
-                            anchors.bottom: parent.bottom
-                            anchors.rightMargin: parent.border.width
-                            anchors.bottomMargin: parent.border.width
-                            font.pixelSize: dateNumber.font.pixelSize * 5/8
-                            bgheight: dateNumber.bgheight * 5/8
-                            bgopacity: 1/2
-                            text: Qt.locale().dayName(mod(index, 7), Locale.ShortFormat)
-                            visible: index < 7
-                        }
-
-                        Rectangle { // isHoliday indicator
-                            width: margin * 2
-                            height: margin * 2
-                            anchors.bottom: parent.bottom
-                            anchors.left: parent.left
-                            anchors.margins: margin * 2
-                            border.width: margin / 2
-                            border.color: Qt.darker(color)
-                            color: color12(new Date(clock.date.setDate(rawdate)).getMonth())
-                            visible: isHoliday(doi(index))
-                        }
-                    }
-                    Item {
-                        width: parent.width   // i wish i could make this bigger, but
-                        height: parent.height // the hover state gets more unreliable
-                        HoverHandler {
-                            id: dayBox
-                            onHoveredChanged: {
-                                overAny += hovered ? 1 : -1
-                                hoveredDate = doi(index)
-                                vHoveredMonth = box.v(rawdate)
-                            }
-                        }
-                        Connections {
-                            target: root
-                            function onRefresh() {
-                                if (dayBox.hovered) {
-                                    hoveredDate = doi(index)
-                                    vHoveredMonth = box.v(rawdate)
-                                } else {
-                                    temp = index - rawdate // initialize vHoveredMonth via temp with v(current day)
-                                }
-                            }
-                        }
+                        width:  margin * 2
+                        height: margin * 2
+                        anchors { bottom: parent.bottom; right: parent.right; margins: margin * 2 }
+                        border { width: margin /2; color: Qt.darker(color) }
+                        color: color12(cell.month)
+                        visible: holidaysOnDate(cell.fullDate).length > 0
                     }
                 }
-            }
 
-            MyText {
-                id: month
-                Layout.columnSpan: 7
-                Layout.alignment: Qt.AlignHCenter
-                text: Qt.locale().monthName(hoveredDate.getMonth()) + " " + hoveredDate.getFullYear()
-                color: color12(hoveredDate.getMonth())
-            }            
-        }
-        
-        MyText {
-            id: holidayArea
-            x: dateLayout.width + margin
-            text: holiday.hovered ?
-                      fetching ?
-                          "fetching..."
-                      :   cachedYears.includes(String(hoveredDate.getFullYear())) ?
-                              "already cached!"
-                          :   "fetch " + holiplace + " holidays for " + hoveredDate.getFullYear()
-                  :   Qt.formatDate(hoveredDate, "MMM dd") + "\n" + holidaysOnDate(hoveredDate)
-            font.underline: holiday.hovered
-            visible: dateLayout.visible
-            HoverHandler { id: holiday; onHoveredChanged: overAny += hovered ? 1 : -1 }
-            TapHandler {
-                acceptedButtons: Qt.LeftButton
-                onTapped: { fetchHolidays(hoveredDate.getFullYear()) }
+                function updateHoveredCell() {
+                    if (cellArea.hovered) {
+                        hoveredCell = cell
+                        hoveredIndex = index
+                    }
+                }
+                HoverHandler { id: cellArea; onHoveredChanged: updateHoveredCell() }
+                Connections { target: root; function onRefresh() { updateHoveredCell() } }
             }
-            onTextChanged: { opacity = 1; fadeTimer.restart() }
-            Timer { id: fadeTimer; interval: 4000; onTriggered: holidayArea.opacity = 0 }
-            Behavior on opacity { NumberAnimation { duration: 400 } }
         }
+    }
+
+    MyText {
+        x: (monthGrid.width -width) /2
+        y: monthGrid.height + height + margin
+        text: Qt.formatDate(hoveredCell.fullDate, "MMMM yyyy")
+        color: color12(hoveredCell.month)
+        visible: monthGrid.visible
+    }
+
+    property string cachedCountriesForYear: {
+        holidayTick; holiISO
+        return Object.keys(cache.data ?? {})
+            .filter(c => cache.data[c]?.[hoveredCell.year])
+            .join(", ")
+    }
+    MyText {
+        id: holidayDisplay
+        x: monthGrid.width
+        y: monthGrid.y + Math.max(0, (monthGrid.height /6) * (((hoveredIndex -hoveredCell.date + 1) /7) |0))
+        text:
+        (function() {
+            if (!holiArea.hovered) {
+                return Qt.formatDate(hoveredCell.fullDate, "MMM dd\n") +
+                       holidaysOnDate(hoveredCell.fullDate)
+            }
+            if (fetching) {
+                return "fetching..."
+            }
+            if (holiplace === "") {
+                return "select country for holiday fetching..."
+            }
+            const cached = cachedCountries(hoveredCell.year)
+            return (cached.includes(holiISO) ? "" : `click to fetch holidays:\n${hoveredCell.year} (${holiplace})\n`)
+                 + (cached.length            ? `cached: ${cached.join(", ")}` : "")
+        })()
+        font.bold: holiArea.hovered
+        visible: monthGrid.visible && !globeArea.hovered
+
+        TapHandler { onTapped: { fetchHolidays(hoveredCell.year) } }
+        HoverHandler { id: holiArea }
+    }
+
+    property bool globeOn
+    Globe {
+        id: globe
+        x: monthGrid.width + margin*2
+        z: -2
+        width:  openGlobe.y + openGlobe.height
+        height: openGlobe.y + openGlobe.height
+        visible: monthGrid.visible && globeOn
+        clickable: globeArea.hovered
+
+        HoverHandler { id: globeArea }
+    }
+    MyText {
+        id: openGlobe
+        anchors.top: monthGrid.bottom
+        anchors.right: monthGrid.right
+        anchors.rightMargin: margin
+        text: (holiplace == "" && holiArea.hovered) ? "-> 󰇨" : globeOn ? "󰇧" : "󰇨"
+        visible: monthGrid.visible
+
+        TapHandler { onTapped: globeOn ^= true }
+        HoverHandler { id: openArea }
     }
 }

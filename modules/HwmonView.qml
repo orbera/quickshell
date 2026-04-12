@@ -1,48 +1,35 @@
 import QtQuick
 import Qt.labs.folderlistmodel
-import Quickshell
 import Quickshell.Io
 
-// generalized form of code by m7moud_el_zayat
+// based on code by m7moud_el_zayat
 Item {
     id: root
-    property alias msInterval: timer.interval
-    property alias nameIncludes: fileview.nameIncludes
-    property alias readFile: fileview.readFile
-    property real value
+    property string nameIncludes
+    property string readFile
+    property real   value
 
-    FolderListModel { id: folderListModel; folder: "file:///sys/class/hwmon" }
+    function reload() { if (scanner.done) scanner.reload() }
+
+    FolderListModel { id: folders; folder: "file:///sys/class/hwmon" }
 
     FileView {
-        id: fileview
+        id: scanner
         property int index: 0
         property bool done: false
 
-        property string fileName: "name"
-        property string nameIncludes
-        property string readFile
-
-        path: folderListModel.status === FolderListModel.Ready ? `file:///sys/class/hwmon/hwmon${Math.min(index, folderListModel.count - 1)}/${fileName}` : ""
+        path: folders.status === FolderListModel.Ready
+            ? `file:///sys/class/hwmon/hwmon${Math.min(index, folders.count - 1)}/${done ? root.readFile : "name"}`
+            : ""
 
         onLoaded: {
-            if (!done) {
-                if (text().includes(nameIncludes)) {
-                    Qt.callLater(() => {
-                        done = true;
-                        fileName = readFile;
-                    });
-            } else if (index < folderListModel.count - 1)
-                Qt.callLater(() => ++index);
-            } else
-                root.value = Number(text());
+            if (done) {
+                root.value = Number(text())
+            } else if (text().includes(root.nameIncludes)) {
+                Qt.callLater(() => { done = true })
+            } else if (index < folders.count -1) {
+                Qt.callLater(() => ++index)
+            }
         }
-    }
-    
-    Timer {
-        id: timer
-        running: true
-        repeat: true
-
-        onTriggered: fileview.reload()
     }
 }

@@ -1,6 +1,7 @@
 import Quickshell
 import Quickshell.Io
 import QtQuick
+import QtQuick.Shapes
 import QtQuick.Layouts
 
 Item {
@@ -9,12 +10,10 @@ Item {
     height: barSize
 
     property real cpuPerc
-    property real usedMemory
-    property real totalMemory
     property real usedMemoryPerc
     property real uptime
+    property int  gpuPerc
 
-    property int gpuPercent
     property int msInterval: 2000
 
     RowLayout {
@@ -23,138 +22,138 @@ Item {
         spacing: margin
 
         MyText {
-            text: Math.round(usedMemoryPerc * 100) + "% "
-                + ""
+            text: "  "
+            Gauge { value: usedMemoryPerc; nCharsBack: 3 }
         }
 
         MyText {
-            text: Math.round(cpuPerc * 100) + "% "
-                + Math.round(cpuTemp.value / 1000) + "°C "
-                + ""
+            text: Math.round(cpuTemp.value /1000) + "°C   "
+            Gauge { value: cpuPerc; nCharsBack: 3 }
         }
 
         MyText {
-            text: gpuPercent + "% "
-                + Math.round(gpuTemp.value / 1000) + "°C "
-                + gpuFan.value + "rpm   "
+            text: gpuFan.value + "rpm " + Math.round(gpuTemp.value /1000) + "°C     "
+            Gauge { value: gpuPerc /100; nCharsBack: 4 }
             MyText {
                 text: "󰢮"
                 anchors.right: parent.right
                 font.pixelSize: parent.font.pixelSize * 3/2
-                y: (parent.font.pixelSize - font.pixelSize) / 2
+                y: (parent.font.pixelSize - font.pixelSize) /(5/3)
                 bgopacity: 0
             }
-            color: (gpuTemp.value < gpuCritTemp.value) ? fontColor : "red"
+            color: gpuTemp.value > gpuCritTemp.value ? "red" : fontColor
         }
     }
 
-    SystemClock { precision: SystemClock.Seconds; onSecondsChanged: procUptime.reload() }
-    function pad(n){ var padded = n.toString().padStart(2, "0"); return padded; }
+    function pad(n) { return n.toString().padStart(2, "0") }
     MyText {
-        x: (screen.width / 2) - parent.x - (width / 2)
-        y: margin - parent.y
-        text: Math.floor(uptime/3600) + ":" + pad(Math.floor(uptime/60) % 60) + ":" + pad(Math.floor(uptime) % 60)
+        x: screen.width/2 -parent.x -width/2
+        y: margin -parent.y
+        text: Math.floor(uptime /3600) + ":" + pad(Math.floor(uptime /60) % 60) + ":" + pad(Math.floor(uptime) % 60)
         visible: Niri.oview
     }
 
-    HwmonView {
-        id: cpuTemp
-        msInterval: root.msInterval
-        nameIncludes: "temp"
-        readFile: "temp3_input"
-    }
-/*! HwmonView {  // enable temperature control in bios
-        id: cpuCritTemp
-        msInterval: root.msInterval
-        nameIncludes: "temp"
-        readFile: "temp3_crit"
-    } */
+    SystemClock { precision: SystemClock.Seconds; onSecondsChanged: procUptime.reload() }
 
-    // current values only work for amd
-    
-    FileView {
-        id: procGpu
-        path: "/sys/class/drm/card1/device/gpu_busy_percent"
-        onLoaded: gpuPercent = this.text()
-    }
-
-    HwmonView {
-        id: gpuTemp
-        msInterval: root.msInterval
-        nameIncludes: "amdgpu"
-        readFile: "temp1_input"
-    }
-    HwmonView {
-        id: gpuCritTemp
-        msInterval: root.msInterval
-        nameIncludes: "amdgpu"
-        readFile: "temp1_crit"
+    component Arc: Shape {
+        id: pieShape
+        width: parent.height; height: width
+        layer.enabled: true
+        layer.samples: 4
+        preferredRendererType: Shape.CurveRenderer
+        property real sweep: 1
+        property alias color: shape.strokeColor
+        ShapePath {
+            id: shape
+            fillColor: "transparent"
+            strokeColor: fontColor
+            strokeWidth: barSize /9
+            capStyle: ShapePath.FlatCap
+            PathAngleArc {
+                centerX: pieShape.width /2; centerY: centerX
+                radiusX: pieShape.width /4; radiusY: radiusX
+                startAngle: 90
+                sweepAngle: sweep * 360
+                moveToStart: true
+            }
+        }
     }
 
-    HwmonView {
-        id: gpuFan
-        msInterval: root.msInterval
-        nameIncludes: "amdgpu"
-        readFile: "fan1_input"
+    component Gauge: Item {
+        width: parent.width
+        height: parent.height
+        property alias value: valueArc.sweep
+        property int nCharsBack
+        TextEdit {
+            id: check
+            text: parent.parent.text
+            font: parent.parent.font
+            leftPadding: parent.parent.leftPadding
+            rightPadding: parent.parent.rightPadding
+            visible: false
+        }
+        readonly property int c: check.text.length - nCharsBack
+        readonly property real arcX: (3 * check.positionToRectangle(Math.min(c,     check.length)).x
+                                         -check.positionToRectangle(Math.min(c + 1, check.length)).x) /2
+        Arc { x: arcX; color: Qt.alpha(Qt.darker(fontColor), 1/3) }
+        Arc { x: arcX; id: valueArc }
     }
-
-    // all below by m7moud_el_zayat
 
     Timer {
         interval: root.msInterval
         running: true
         repeat: true
-
         onTriggered: {
-            procStat.reload();
-            procMemInfo.reload();
+            procStat.reload()
+            procMemInfo.reload()
             procGpu.reload()
+            cpuTemp.reload()
+            gpuTemp.reload()
+            gpuCritTemp.reload()
+            gpuFan.reload()
         }
     }
 
-    // Real-time CPU Usage
+// current values only work for amd gpus
+    FileView {
+        id: procGpu
+        path: "file:///sys/class/drm/card1/device/gpu_busy_percent"
+        onLoaded: gpuPerc = parseInt(text())
+    }
+    HwmonView { id: gpuTemp;     nameIncludes: "amdgpu"; readFile: "temp1_input" }
+    HwmonView { id: gpuCritTemp; nameIncludes: "amdgpu"; readFile: "temp1_crit"  }
+    HwmonView { id: gpuFan;      nameIncludes: "amdgpu"; readFile: "fan1_input"  }
+
+    HwmonView { id: cpuTemp;     nameIncludes: "temp";   readFile: "temp3_input" }
+
+// all below based on code by m7moud_el_zayat
     FileView {
         id: procStat
         path: "file:///proc/stat"
-
         property real lastCpuIdle
         property real lastCpuTotal
-
         onLoaded: {
-            const cpuTimes = text().split(' ').slice(2, 9).map(Number);
-
-            const idle = cpuTimes[3] + cpuTimes[4];
-            const total = cpuTimes.reduce((acc, cur) => acc + cur, 0);
-
-            const idleDiff = idle - lastCpuIdle;
-            const totalDiff = total - lastCpuTotal;
-
-            root.cpuPerc = lastCpuTotal > 0 && totalDiff > 0 ? 1 - idleDiff / totalDiff : 0;
-
-            lastCpuIdle = idle;
-            lastCpuTotal = total;
+            const cpuTimes = text().split(' ').slice(2, 9).map(Number)
+            const idle  = cpuTimes[3] + cpuTimes[4]
+            const total = cpuTimes.reduce((a, b) => a + b, 0)
+            const idleDiff  = idle  -lastCpuIdle
+            const totalDiff = total -lastCpuTotal
+            root.cpuPerc = lastCpuTotal > 0 && totalDiff > 0 ? 1 -idleDiff/totalDiff : 0
+            lastCpuIdle  = idle
+            lastCpuTotal = total
         }
     }
-
-    // Memory Usage
     FileView {
         id: procMemInfo
         path: "file:///proc/meminfo"
-
         onLoaded: {
-            const memNumbers = text().split('\n').map(m => parseInt(m.split(':')[1]));
-
-            root.totalMemory = memNumbers[0] / (1024 * 1024)
-            root.usedMemory = (memNumbers[0] - memNumbers[2]) / (1024 * 1024);
-            root.usedMemoryPerc = 1 - memNumbers[2] / memNumbers[0]
+            const m = text().split('\n').map(line => parseInt(line.split(':')[1]))
+            root.usedMemoryPerc = 1 -m[2]/m[0]
         }
     }
-
-    // Uptime
     FileView {
         id: procUptime
         path: "file:///proc/uptime"
-
         onLoaded: root.uptime = parseInt(text())
     }
 }

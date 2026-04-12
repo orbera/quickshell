@@ -28,7 +28,7 @@ Rectangle {
                     anchors.centerIn: parent
                     width:   model.isActive ? boxSize : boxSize * inactiveRatio
                     height:  model.isActive ? boxSize : boxSize * inactiveRatio
-                    opacity: model.isActive ? 7/8 : 1/2
+                    opacity: model.isActive ? 3/4 : 1/2
                     color:        model.isActive ? Qt.darker(fontColor) : fontColor
                     border.color: model.isActive ? fontColor : Qt.darker(fontColor)
                     border.width: boxSize * (borderRatio / 2)
